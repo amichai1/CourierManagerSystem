@@ -104,10 +104,10 @@ internal static class CourierManager
     {
         return new DO.Courier(
             boCourier.Id,
-            boCourier.Name!,
-            boCourier.Phone!,
-            boCourier.Email!,
-            boCourier.Password!,
+            boCourier.Name,
+            boCourier.Phone,
+            boCourier.Email,
+            boCourier.Password,
             boCourier.IsActive,
             boCourier.MaxDeliveryDistance,
             (DO.DeliveryType)boCourier.DeliveryType,
@@ -339,7 +339,11 @@ internal static class CourierManager
     }
     /// <summary>
     /// Periodic update method called after the system clock advances.
-    /// Checks inactivity range against the system clock.
+    /// Behavior implemented:
+    /// - Use InactivityRange from config.
+    /// - If courier has an in-progress delivery they remain active.
+    /// - Otherwise check the most recent completed delivery EndTime; if none exist, use StartWorkingDate.
+    /// - If the reference time is older than InactivityRange -> set IsActive = false.
     /// </summary>
     public static void PeriodicCourierUpdates(DateTime oldClock, DateTime newClock)
     {

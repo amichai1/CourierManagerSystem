@@ -226,7 +226,7 @@ internal static class OrderManager
     {
         lock (AdminManager.BlMutex)
         {
-            // [1] VALIDATION: Order must be Confirmed and Courier must be Available
+            // validation
             BO.Order boOrder = ReadOrder(orderId);
             BO.Courier boCourier = CourierManager.ReadCourier(courierId);
 
@@ -410,4 +410,5 @@ internal static class OrderManager
             }
         }
     }
+
 }

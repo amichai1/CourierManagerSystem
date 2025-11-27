@@ -1,7 +1,9 @@
-﻿using System;
-using System.Runtime.CompilerServices;
-using DalApi;
+﻿using BL.Helpers;
 using BO;
+using DalApi;
+using DalTest;
+using System;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using DalTest;
@@ -65,7 +67,7 @@ internal static class AdminManager
     [MethodImpl(MethodImplOptions.Synchronized)]
     internal static void UpdateClock(DateTime newClock)
     {
-        var oldClock = s_dal.Config.Clock;
+        DateTime oldClock = s_dal.Config.Clock;
         s_dal.Config.Clock = newClock;
         BL.Helpers.CourierManager.PeriodicCourierUpdates(oldClock, newClock);
         BL.Helpers.OrderManager.PeriodicOrderUpdates(oldClock, newClock);
