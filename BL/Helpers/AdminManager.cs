@@ -1,10 +1,11 @@
-﻿using System;
-using System.Runtime.CompilerServices;
-using DalApi;
+﻿using BL.Helpers;
 using BO;
+using DalApi;
+using DalTest;
+using System;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using DalTest;
 
 namespace Helpers;
 
@@ -65,16 +66,38 @@ internal static class AdminManager
     [MethodImpl(MethodImplOptions.Synchronized)]
     internal static void UpdateClock(DateTime newClock)
     {
-        var oldClock = s_dal.Config.Clock;
+        DateTime oldClock = s_dal.Config.Clock;
         s_dal.Config.Clock = newClock;
 
-        // Add calls here to any logic method that should be called periodically,
-        // after each clock update. These managers must be implemented in 7c.
+        // Call periodic update methods implemented for each entity.
+        // Keep calls inside try/catch so one failing manager doesn't stop others.
+        try
+        {
+            CourierManager.PeriodicCourierUpdates(oldClock, newClock);
+        }
+        catch (Exception ex)
+        {
+            // convert/log as needed; don't crash the clock runner
+            System.Diagnostics.Debug.WriteLine($"PeriodicCourierUpdates failed: {ex.Message}");
+        }
 
-        // Example calls:
-        // CourierManager.PeriodicCourierUpdates(oldClock, newClock); 
-        // OrderManager.PeriodicOrderUpdates(oldClock, newClock);
-        // DeliveryManager.PeriodicDeliveryUpdates(oldClock, newClock); 
+        try
+        {
+            OrderManager.PeriodicOrderUpdates(oldClock, newClock);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"PeriodicOrderUpdates failed: {ex.Message}");
+        }
+
+        try
+        {
+            DeliveryManager.PeriodicDeliveryUpdates(oldClock, newClock);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"PeriodicDeliveryUpdates failed: {ex.Message}");
+        }
 
         //Calling all the observers of clock update
         ClockUpdatedObservers?.Invoke();

@@ -181,7 +181,7 @@ internal static class OrderManager
     {
         lock (AdminManager.BlMutex)
         {
-            // [1] VALIDATION: Order must be Confirmed and Courier must be Available
+            // validation
             BO.Order boOrder = ReadOrder(orderId);
             BO.Courier boCourier = CourierManager.ReadCourier(courierId);
 
@@ -239,15 +239,92 @@ internal static class OrderManager
     // --- 4. PERIODIC UPDATES ---
     // ------------------------------------
 
+    /// <summary>
+    /// Periodic maintenance for orders when the system clock advances.
+    /// Behaviors implemented:
+    /// - If an order was assigned to a courier but not picked up within MaxDeliveryTime,
+    ///   the courier assignment is removed (order reopens) so another courier can take it.
+    /// - (Risk detection may be added later.)
+    /// </summary>
+    //public static void PeriodicOrderUpdates(DateTime oldClock, DateTime newClock)
+    //{
+    //    lock (AdminManager.BlMutex)
+    //    {
+    //        try
+    //        {
+    //            var config = AdminManager.GetConfig();
+
+    //            // read authoritative DO orders
+    //            IEnumerable<DO.Order> doOrders = s_dal.Order.ReadAll().ToList();
+
+    //            foreach (var o in doOrders)
+    //            {
+    //                // only consider assigned orders that were not picked up yet
+    //                if (o.CourierId != 0 && o.PickupDate is null && o.CourierAssociatedDate is not null)
+    //                {
+    //                    TimeSpan sinceAssigned = newClock - o.CourierAssociatedDate.Value;
+
+    //                    // If exceeded maximum allowed delivery time -> unassign courier so order returns to pool
+    //                    if (config.MaxDeliveryTime != default && sinceAssigned > config.MaxDeliveryTime)
+    //                    {
+    //                        DO.Order updated = o with
+    //                        {
+    //                            CourierId = 0,
+    //                            CourierAssociatedDate = null
+    //                        };
+
+    //                        s_dal.Order.Update(updated);
+    //                    }
+    //                    // else: we could flag risk when remaining time <= RiskRange (no persistent field to set now)
+    //                }
+    //            }
+    //        }
+    //        catch (DO.DalDoesNotExistException ex)
+    //        {
+    //            throw new BLDoesNotExistException("PeriodicOrderUpdates: order not found.", ex);
+    //        }
+    //        catch (Exception ex)
+    //        {
+    //            throw new BLOperationFailedException($"PeriodicOrderUpdates failed: {ex.Message}", ex);
+    //        }
+    //    }
+    //}
     public static void PeriodicOrderUpdates(DateTime oldClock, DateTime newClock)
     {
         lock (AdminManager.BlMutex)
         {
-            // Logic: Check orders that are associated but not picked up and exceed MaxDeliveryTime/RiskRange
-            // Example:
-            // TimeSpan riskThreshold = AdminManager.GetConfig().RiskRange;
-            // var riskyOrders = s_dal.Orders.ReadAll(o => o.Status == Associated && (AdminManager.Now - o.CourierAssociatedDate) > riskThreshold);
-            // Log/flag risky orders.
+            var config = AdminManager.GetConfig();
+            TimeSpan maxPickupWait = config.MaxDeliveryTime;
+
+            var orders = s_dal.Order.ReadAll().ToList();
+
+            foreach (var doOrder in orders)
+            {
+
+                var order = ConvertDOToBO(doOrder); ;
+
+                if (order.DeliveryDate is not null ||
+                    order.OrderStatus == OrderStatus.Canceled ||
+                    order.OrderStatus == OrderStatus.Delivered)
+                    continue;
+                if (order.CourierAssociatedDate is null)
+                    continue;
+                if (order.PickupDate is not null)
+                    continue;
+
+                TimeSpan elapsed = AdminManager.Now - order.CourierAssociatedDate.Value;
+                
+                if (elapsed > maxPickupWait)
+                {
+                    order.OrderStatus = OrderStatus.Canceled;
+                    order.ScheduleStatus = ScheduleStatus.Late;
+                    order.DeliveryDate = AdminManager.Now;
+
+                    var updatedDoOrder = ConvertBOToDO(order);
+                    s_dal.Order.Update(updatedDoOrder);
+                }
+            }
         }
     }
+
 }

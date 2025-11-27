@@ -47,10 +47,10 @@ internal static class CourierManager
     {
         return new DO.Courier(
             boCourier.Id,
-            boCourier.Name!,
-            boCourier.Phone!,
-            boCourier.Email!,
-            boCourier.Password!,
+            boCourier.Name,
+            boCourier.Phone,
+            boCourier.Email,
+            boCourier.Password,
             boCourier.IsActive,
             boCourier.MaxDeliveryDistance,
             (DO.DeliveryType)boCourier.DeliveryType,
@@ -199,26 +199,62 @@ internal static class CourierManager
 
     /// <summary>
     /// Periodic update method called after the system clock advances.
-    /// Checks inactivity range against the system clock.
+    /// Behavior implemented:
+    /// - Use InactivityRange from config.
+    /// - If courier has an in-progress delivery they remain active.
+    /// - Otherwise check the most recent completed delivery EndTime; if none exist, use StartWorkingDate.
+    /// - If the reference time is older than InactivityRange -> set IsActive = false.
     /// </summary>
     public static void PeriodicCourierUpdates(DateTime oldClock, DateTime newClock)
     {
         lock (AdminManager.BlMutex)
         {
-            TimeSpan maxInactivityTime = AdminManager.GetConfig().InactivityRange;
-            IEnumerable<DO.Courier> doCouriers = s_dal.Courier.ReadAll();
-
-            foreach (DO.Courier doCourier in doCouriers)
+            try
             {
-                if (doCourier.IsActive)
+                TimeSpan inactivityRange = AdminManager.GetConfig().InactivityRange;
+
+                // Read required DAL lists once
+                var doCouriers = s_dal.Courier.ReadAll().ToList();
+                var doDeliveries = s_dal.Delivery.ReadAll().ToList();
+
+                foreach (var courier in doCouriers)
                 {
-                    TimeSpan timeSinceStart = AdminManager.Now - doCourier.StartWorkingDate;
-                    if (timeSinceStart > maxInactivityTime)
-                    { 
-                        DO.Courier updatedCourier = doCourier with { IsActive = false };
-                        s_dal.Courier.Update(updatedCourier);
+                    // If courier already inactive, skip
+                    if (!courier.IsActive)
+                        continue;
+
+                    // If courier currently has an in-progress delivery -> keep active
+                    bool hasInProgress = doDeliveries.Any(d => d.CourierId == courier.Id && !d.CompletionStatus.HasValue);
+                    if (hasInProgress)
+                        continue;
+
+                    // Find last completed delivery EndTime for this courier
+                    var lastCompleted = doDeliveries
+                        .Where(d => d.CourierId == courier.Id
+                                    && d.CompletionStatus.HasValue
+                                    && d.CompletionStatus.Value == DO.DeliveryStatus.Completed
+                                    && d.EndTime.HasValue)
+                        .OrderByDescending(d => d.EndTime!.Value)
+                        .FirstOrDefault();
+
+                    DateTime referenceTime = lastCompleted is not null
+                        ? lastCompleted.EndTime!.Value
+                        : courier.StartWorkingDate; // if no completed deliveries, use start date
+
+                    if ((newClock - referenceTime) > inactivityRange)
+                    {
+                        DO.Courier updated = courier with { IsActive = false };
+                        s_dal.Courier.Update(updated);
                     }
                 }
+            }
+            catch (DO.DalDoesNotExistException ex)
+            {
+                throw new BLDoesNotExistException("PeriodicCourierUpdates: entity not found.", ex);
+            }
+            catch (Exception ex)
+            {
+                throw new BLOperationFailedException($"PeriodicCourierUpdates failed: {ex.Message}", ex);
             }
         }
     }
