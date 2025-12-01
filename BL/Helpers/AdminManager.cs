@@ -1,4 +1,4 @@
-﻿using BL.Helpers;
+using BL.Helpers;
 using BO;
 using DalApi;
 using DalTest;
@@ -6,7 +6,6 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using DalTest;
 using Helpers;
 
 namespace Helpers;

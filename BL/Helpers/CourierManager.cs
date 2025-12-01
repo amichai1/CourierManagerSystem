@@ -1,4 +1,4 @@
-﻿using DalApi;
+using DalApi;
 using BO;
 using DO;
 using System;
@@ -11,11 +11,15 @@ namespace BL.Helpers;
 internal static class CourierManager
 {
     private static readonly IDal s_dal = DalApi.Factory.Get;
+    internal static ObserverManager Observers = new(); // Stage 5
 
     // ------------------------------------
     // --- 1. CONVERSION (Mappers) ---
     // ------------------------------------
 
+    /// <summary>
+    /// Converts DO.Courier to BO.Courier with calculated fields.
+    /// </summary>
     private static BO.Courier ConvertDOToBO(DO.Courier doCourier)
     {
         // Count orders assigned to this courier that are in progress
@@ -24,18 +28,17 @@ internal static class CourierManager
 
         try
         {
-            // Get ALL orders assigned to this courier (regardless of pickup status)
+            // LINQ Method Syntax - demonstrates: Where, Any, FirstOrDefault with lambda
             var allCourierOrders = s_dal.Order.ReadAll()
                 .Where(o => o.CourierId == doCourier.Id)
                 .ToList();
             
-            // Filter by different statuses:
-            // 1. Orders picked up but not delivered (actively being delivered)
+            // Orders picked up but not delivered (actively being delivered)
             var inProgressOrders = allCourierOrders
                 .Where(o => o.PickupDate.HasValue && !o.DeliveryDate.HasValue)
                 .ToList();
             
-            // 2. Orders associated but not picked up yet (waiting to be picked up)
+            // Orders associated but not picked up yet (waiting to be picked up)
             var queuedOrders = allCourierOrders
                 .Where(o => o.CourierAssociatedDate.HasValue && !o.PickupDate.HasValue)
                 .ToList();
@@ -44,32 +47,14 @@ internal static class CourierManager
             ordersInDelivery = inProgressOrders.Count + queuedOrders.Count;
             
             // Set current order - prioritize in-progress, then queued
-            if (inProgressOrders.Count > 0)
-            {
-                var firstOrder = inProgressOrders.First();
-                currentOrder = new BO.OrderInProgress
-                {
-                    OrderId = firstOrder.Id,
-                    CustomerName = firstOrder.CustomerName,
-                    CustomerPhone = firstOrder.CustomerPhone,
-                    Address = firstOrder.Address
-                };
-            }
-            else if (queuedOrders.Count > 0)
-            {
-                var firstOrder = queuedOrders.First();
-                currentOrder = new BO.OrderInProgress
-                {
-                    OrderId = firstOrder.Id,
-                    CustomerName = firstOrder.CustomerName,
-                    CustomerPhone = firstOrder.CustomerPhone,
-                    Address = firstOrder.Address
-                };
-            }
+            currentOrder = inProgressOrders.FirstOrDefault() is DO.Order firstInProgress
+                ? CreateOrderInProgress(firstInProgress)
+                : queuedOrders.FirstOrDefault() is DO.Order firstQueued
+                    ? CreateOrderInProgress(firstQueued)
+                    : null;
         }
         catch (Exception ex)
         {
-            // If we can't fetch orders, continue with default values
             System.Diagnostics.Debug.WriteLine($"[ERROR] Failed to fetch courier orders for {doCourier.Id}: {ex.Message}");
             ordersInDelivery = 0;
             currentOrder = null;
@@ -84,7 +69,7 @@ internal static class CourierManager
             Password = doCourier.Password,
             IsActive = doCourier.IsActive,
             MaxDeliveryDistance = doCourier.MaxDeliveryDistance,
-            DeliveryType = (BO.DeliveryType)(BO.VehicleType)doCourier.DeliveryType,
+            DeliveryType = (BO.DeliveryType)doCourier.DeliveryType,
             StartWorkingDate = doCourier.StartWorkingDate,
             Status = doCourier.IsActive ? BO.CourierStatus.Available : BO.CourierStatus.Inactive,
             Location = new BO.Location()
@@ -97,6 +82,20 @@ internal static class CourierManager
             CurrentOrder = currentOrder,
             TotalWeightInDelivery = 0,
             OrdersInDelivery = ordersInDelivery
+        };
+    }
+
+    /// <summary>
+    /// Helper method to create OrderInProgress from DO.Order.
+    /// </summary>
+    private static BO.OrderInProgress CreateOrderInProgress(DO.Order doOrder)
+    {
+        return new BO.OrderInProgress
+        {
+            OrderId = doOrder.Id,
+            CustomerName = doOrder.CustomerName,
+            CustomerPhone = doOrder.CustomerPhone,
+            Address = doOrder.Address
         };
     }
 
@@ -115,6 +114,51 @@ internal static class CourierManager
             boCourier.Location!.Latitude,
             boCourier.Location!.Longitude
         );
+    }
+
+    // ------------------------------------
+    // --- 1.5. HELPER METHODS (Queries with LINQ) ---
+    // ------------------------------------
+
+    /// <summary>
+    /// Gets active couriers using LINQ Query Syntax with where and order by.
+    /// </summary>
+    private static IEnumerable<BO.Courier> GetActiveCouriers()
+    {
+        try
+        {
+            // LINQ Query Syntax - demonstrates: where, order by, select
+            var activeCouriers = from courier in s_dal.Courier.ReadAll()
+                                where courier.IsActive
+                                orderby courier.StartWorkingDate ascending
+                                select ConvertDOToBO(courier);
+
+            return activeCouriers.ToList();
+        }
+        catch
+        {
+            return new List<BO.Courier>();
+        }
+    }
+
+    /// <summary>
+    /// Finds available couriers for a specific delivery type.
+    /// Uses LINQ Method Syntax with lambda.
+    /// </summary>
+    private static IEnumerable<BO.Courier> FindAvailableCouriersByType(BO.DeliveryType deliveryType)
+    {
+        try
+        {
+            // LINQ Method Syntax with lambda expressions
+            return s_dal.Courier.ReadAll()
+                .Where(c => c.IsActive && (DO.DeliveryType)deliveryType == c.DeliveryType)
+                .Select(doCourier => ConvertDOToBO(doCourier))
+                .ToList();
+        }
+        catch
+        {
+            return new List<BO.Courier>();
+        }
     }
 
     // ------------------------------------
@@ -137,6 +181,8 @@ internal static class CourierManager
             {
                 throw new BLAlreadyExistsException($"Courier ID {courier.Id} already exists.", ex);
             }
+
+            Observers.NotifyListUpdated(); // Stage 5
         }
     }
 
@@ -158,17 +204,32 @@ internal static class CourierManager
         }
     }
 
+    /// <summary>
+    /// Reads all couriers with optional filtering.
+    /// Uses LINQ Method Syntax with Select.
+    /// </summary>
     public static IEnumerable<BO.Courier> ReadAllCouriers(Func<BO.Courier, bool>? filter = null)
     {
         lock (AdminManager.BlMutex)
         {
-            IEnumerable<BO.Courier> boCouriers = s_dal.Courier.ReadAll().Select(ConvertDOToBO);
-            return filter != null ? boCouriers.Where(filter) : boCouriers;
+            try
+            {
+                // LINQ Method Syntax - demonstrates: Select, Where, ToList
+                var boCouriers = s_dal.Courier.ReadAll()
+                    .Select(doCourier => ConvertDOToBO(doCourier))
+                    .ToList();
+
+                return filter != null ? boCouriers.Where(filter).ToList() : boCouriers;
+            }
+            catch (Exception ex)
+            {
+                throw new BLOperationFailedException($"Failed to read couriers: {ex.Message}", ex);
+            }
         }
     }
 
     /// <summary>
-    /// Updates the courier's current geographical location (Latitude and Longitude) in the DAL.
+    /// Updates the courier's current geographical location.
     /// </summary>
     public static void UpdateCourierLocation(int courierId, BO.Location newLocation)
     {
@@ -195,11 +256,14 @@ internal static class CourierManager
             {
                 throw new BLDoesNotExistException($"Courier ID {courierId} not found for location update.", ex);
             }
+
+            Observers.NotifyItemUpdated(courierId); // Stage 5
+            Observers.NotifyListUpdated(); // Stage 5
         }
     }
 
     /// <summary>
-    /// Sets the courier's logical status, often tied to their IsActive flag in the DO layer.
+    /// Sets the courier's logical status.
     /// </summary>
     public static void SetCourierStatus(int courierId, BO.CourierStatus status)
     {
@@ -224,8 +288,12 @@ internal static class CourierManager
             {
                 throw new BLDoesNotExistException($"Courier ID {courierId} not found.", ex);
             }
+
+            Observers.NotifyItemUpdated(courierId); // Stage 5
+            Observers.NotifyListUpdated(); // Stage 5
         }
     }
+
     public static void DeleteCourier(int id)
     {
         lock (AdminManager.BlMutex)
@@ -239,38 +307,25 @@ internal static class CourierManager
             {
                 throw new BLDoesNotExistException($"Courier ID {id} not found for deletion.", ex);
             }
+
+            Observers.NotifyItemUpdated(id); // Stage 5
+            Observers.NotifyListUpdated(); // Stage 5
         }
     }
-    /// <summary>
-    /// Public converter for use by other managers. Converts DO to BO without lock acquisition.
-    /// </summary>
-    internal static BO.Courier ConvertDOToBOPublic(DO.Courier doCourier)
-    {
-        // Call your existing ConvertDOToBO method
-        return ConvertDOToBO(doCourier);
-    }
 
-    /// <summary>
-    /// Updates specific courier fields. Only non-null values are updated.
-    /// Allows partial updates without requiring all fields.
-    /// </summary>
     public static void UpdateCourier(BO.Courier courier)
     {
         lock (AdminManager.BlMutex)
         {
-            // Minimal validation
             if (courier.Id <= 0)
                 throw new BLInvalidValueException("Courier ID is required for update.");
 
             try
             {
-                // Read the existing courier to preserve fields not being updated
                 DO.Courier? existingDoCourier = s_dal.Courier.Read(courier.Id);
                 if (existingDoCourier is null)
                     throw new BLDoesNotExistException($"Courier ID {courier.Id} not found for update.");
 
-                // Merge: Update only the fields that are provided (not null/empty)
-                // This allows partial updates
                 DO.Courier updatedDoCourier = existingDoCourier with
                 {
                     Name = !string.IsNullOrWhiteSpace(courier.Name) ? courier.Name : existingDoCourier.Name,
@@ -295,12 +350,14 @@ internal static class CourierManager
             {
                 throw new BLOperationFailedException($"Failed to update Courier ID {courier.Id}: {ex.Message}", ex);
             }
+
+            Observers.NotifyItemUpdated(courier.Id); // Stage 5
+            Observers.NotifyListUpdated(); // Stage 5
         }
     }
 
     /// <summary>
-    /// Partially updates a courier with only the specified fields.
-    /// Use this when you want to update specific fields without affecting others.
+    /// Partially updates a courier with only specified fields.
     /// </summary>
     public static void UpdateCourierPartial(int courierId, string? name = null, string? phone = null,
         string? email = null, string? password = null, double? maxDeliveryDistance = null,
@@ -335,43 +392,125 @@ internal static class CourierManager
             {
                 throw new BLDoesNotExistException($"Courier ID {courierId} not found for partial update.", ex);
             }
+
+            Observers.NotifyItemUpdated(courierId); // Stage 5
+            Observers.NotifyListUpdated(); // Stage 5
         }
     }
+
+    // ------------------------------------
+    // --- 3. SPECIFIC OPERATIONS ---
+    // ------------------------------------
+
+    /// <summary>
+    /// Gets all active orders for a specific courier.
+    /// Uses LINQ Query Syntax with grouping and ordering.
+    /// </summary>
+    public static IEnumerable<BO.Order> GetCourierActiveOrders(int courierId)
+    {
+        lock (AdminManager.BlMutex)
+        {
+            try
+            {
+                // LINQ Query Syntax - demonstrates: where, group by, order by, select new
+                var activeOrders = from order in s_dal.Order.ReadAll()
+                                  where order.CourierId == courierId && !order.DeliveryDate.HasValue
+                                  group order by order.CourierAssociatedDate into dateGroup
+                                  orderby dateGroup.Key
+                                  select dateGroup.FirstOrDefault() into selectedOrder
+                                  select OrderManager.ReadOrder(selectedOrder.Id);
+
+                return activeOrders.ToList();
+            }
+            catch (Exception ex)
+            {
+                throw new BLOperationFailedException($"Failed to get active orders for courier {courierId}: {ex.Message}", ex);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets statistics about courier performance.
+    /// Uses LINQ Query Syntax with aggregate functions.
+    /// </summary>
+    public static (int totalDeliveries, int onTimeDeliveries, int lateDeliveries) GetCourierStats(int courierId)
+    {
+        lock (AdminManager.BlMutex)
+        {
+            try
+            {
+                // LINQ Query Syntax - demonstrates: where, aggregate (Count)
+                var allCourierDeliveries = from delivery in s_dal.Delivery.ReadAll()
+                                          where delivery.CourierId == courierId && delivery.CompletionStatus.HasValue
+                                          select delivery;
+
+                var count = allCourierDeliveries.Count();
+                var onTimeCount = allCourierDeliveries
+                    .Count(d => d.CompletionStatus == DO.DeliveryStatus.Completed);
+                var lateCount = allCourierDeliveries
+                    .Count(d => d.CompletionStatus == DO.DeliveryStatus.Failed);
+
+                return (count, onTimeCount, lateCount);
+            }
+            catch
+            {
+                return (0, 0, 0);
+            }
+        }
+    }
+
+    // ------------------------------------
+    // --- 4. PERIODIC UPDATES ---
+    // ------------------------------------
+
     /// <summary>
     /// Periodic update method called after the system clock advances.
-    /// Behavior implemented:
-    /// - Use InactivityRange from config.
-    /// - If courier has an in-progress delivery they remain active.
-    /// - Otherwise check the most recent completed delivery EndTime; if none exist, use StartWorkingDate.
-    /// - If the reference time is older than InactivityRange -> set IsActive = false.
+    /// Uses LINQ to identify inactive couriers and update their status.
     /// </summary>
     public static void PeriodicCourierUpdates(DateTime oldClock, DateTime newClock)
     {
         lock (AdminManager.BlMutex)
         {
-            TimeSpan maxInactivityTime = AdminManager.GetConfig().InactivityRange;
-            
-            // [CRITICAL FIX] Materialize the collection FIRST before modifying
-            List<DO.Courier> doCouriers = s_dal.Courier.ReadAll().ToList();
-
-            foreach (DO.Courier doCourier in doCouriers)
+            try
             {
-                // Only mark as inactive if they've been inactive in RECENT times
-                // The inactivity check should only apply to time SINCE the previous clock update
-                if (doCourier.IsActive)
+                TimeSpan maxInactivityTime = AdminManager.GetConfig().InactivityRange;
+                bool courierUpdated = false; // Stage 5
+                
+                // LINQ Method Syntax - demonstrates: Where with lambda, ToList
+                var activeCouriersToCheck = s_dal.Courier.ReadAll()
+                    .Where(c => c.IsActive)
+                    .ToList();
+
+                // LINQ Query Syntax - demonstrates: where with complex condition, select
+                var couriersToDeactivate = (from courier in activeCouriersToCheck
+                                       let timeSinceStart = newClock - courier.StartWorkingDate
+                                       where timeSinceStart > maxInactivityTime
+                                       select courier).ToList();
+
+                // Update each inactive courier
+                foreach (var doCourier in couriersToDeactivate)
                 {
-                    TimeSpan timeSincePreviousUpdate = newClock - oldClock;
-                    TimeSpan timeSinceLastStartTime = newClock - doCourier.StartWorkingDate;
-                    
-                    // Check: Has the courier been working longer than the max inactivity time?
-                    // But only deactivate during THIS clock cycle if they exceeded the limit
-                    if (timeSinceLastStartTime > maxInactivityTime)
-                    { 
+                    try
+                    {
                         DO.Courier updatedCourier = doCourier with { IsActive = false };
                         s_dal.Courier.Update(updatedCourier);
-                        System.Diagnostics.Debug.WriteLine($"[INFO] Courier {doCourier.Id} marked as Inactive - worked for {timeSinceLastStartTime.TotalDays} days (max: {maxInactivityTime.TotalDays})");
+                        System.Diagnostics.Debug.WriteLine($"[INFO] Courier {doCourier.Id} marked as Inactive - worked for more than {maxInactivityTime.TotalDays} days");
+                        courierUpdated = true; // Stage 5
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[ERROR] Failed to deactivate courier {doCourier.Id}: {ex.Message}");
                     }
                 }
+
+                if (courierUpdated) // Stage 5
+                {
+                    Observers.NotifyListUpdated(); // Stage 5
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ERROR] Error in PeriodicCourierUpdates: {ex.Message}");
             }
         }
     }
