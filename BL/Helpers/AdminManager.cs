@@ -73,6 +73,9 @@ internal static class AdminManager
         BL.Helpers.CourierManager.PeriodicCourierUpdates(oldClock, newClock);
         BL.Helpers.OrderManager.PeriodicOrderUpdates(oldClock, newClock);
         BL.Helpers.DeliveryManager.PeriodicDeliveryUpdates(oldClock, newClock); 
+        // Check for expired orders after clock advancement
+        BL.Helpers.OrderManager.CheckAndUpdateExpiredOrders();
+        
         ClockUpdatedObservers?.Invoke();
     }
 
