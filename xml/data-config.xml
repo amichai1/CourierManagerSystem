@@ -2,19 +2,19 @@
 <config>
   <NextOrderId>1</NextOrderId>
   <NextDeliveryId>1</NextDeliveryId>
-  <Clock>1/15/2026 7:51:58 PM</Clock>
+  <Clock>1/15/2026 8:01:59 PM</Clock>
   <NextOrderId>81</NextOrderId>
   <NextDeliveryId>113</NextDeliveryId>
   <Clock>21/01/2026 14:00:00</Clock>
   <ManagerId>123456789</ManagerId>
   <ManagerPassword>123456789</ManagerPassword>
-  <CompanyAddress>Yona Green 7, Petah Tikva, Israel</CompanyAddress>
+  <CompanyAddress></CompanyAddress>
   <CarSpeed>30</CarSpeed>
   <MotorcycleSpeed>35</MotorcycleSpeed>
   <BicycleSpeed>15</BicycleSpeed>
   <OnFootSpeed>4</OnFootSpeed>
-  <MaxDeliveryTime>04:00:00</MaxDeliveryTime>
-  <RiskRange>02:00:00</RiskRange>
+  <MaxDeliveryTime>02:00:00</MaxDeliveryTime>
+  <RiskRange>01:30:00</RiskRange>
   <InactivityRange>30.00:00:00</InactivityRange>
   <MaxDeliveryDistance>50</MaxDeliveryDistance>
 </config>
