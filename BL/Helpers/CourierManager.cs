@@ -36,20 +36,20 @@ internal static class CourierManager
             var allCourierOrders = s_dal.Order.ReadAll()
                 .Where(o => o.CourierId == doCourier.Id)
                 .ToList();
-            
+
             // Orders picked up but not delivered (actively being delivered)
             var inProgressOrders = allCourierOrders
                 .Where(o => o.PickupDate.HasValue && !o.DeliveryDate.HasValue)
                 .ToList();
-            
+
             // Orders associated but not picked up yet (waiting to be picked up)
             var queuedOrders = allCourierOrders
                 .Where(o => o.CourierAssociatedDate.HasValue && !o.PickupDate.HasValue)
                 .ToList();
-            
+
             // Count all orders in delivery (both in progress and queued)
             ordersInDelivery = inProgressOrders.Count + queuedOrders.Count;
-            
+
             // Set current order - prioritize in-progress, then queued
             currentOrder = inProgressOrders.FirstOrDefault() is DO.Order firstInProgress
                 ? CreateOrderInProgress(firstInProgress)
@@ -312,11 +312,11 @@ internal static class CourierManager
                 throw new BLInvalidValueException("Invalid geographical coordinates provided.");
 
             try
-            { 
+            {
                 DO.Courier? doCourier = s_dal.Courier.Read(courierId);
                 if (doCourier is null)
                     throw new BLDoesNotExistException($"Courier ID {courierId} not found for location update.");
-                    
+
                 DO.Courier updatedDoCourier = doCourier with
                 {
                     AddressLatitude = newLocation.Latitude,
@@ -361,7 +361,7 @@ internal static class CourierManager
                 DO.Courier? doCourier = s_dal.Courier.Read(courierId);
                 if (doCourier is null)
                     throw new BLDoesNotExistException($"Courier ID {courierId} not found.");
-                    
+
                 bool newIsActive = (status != BO.CourierStatus.Inactive);
                 DO.Courier updatedCourier = doCourier with { IsActive = newIsActive };
                 s_dal.Courier.Update(updatedCourier);
@@ -750,13 +750,13 @@ internal static class CourierManager
                         {
                             DO.Courier updatedCourier = doCourier with { IsActive = false };
                             s_dal.Courier.Update(updatedCourier);
-                            
+
                             System.Diagnostics.Debug.WriteLine(
                                 $"[PERIODIC] ✅ Courier {doCourier.Id} ({doCourier.Name}) deactivated - " +
                                 $"worked for {(newClock - doCourier.StartWorkingDate).TotalDays:F0} days " +
                                 $"(threshold: {maxInactivityTime.TotalDays} days)"
                             );
-                            
+
                             deactivatedCourierIds.Add(doCourier.Id);
                         }
                         else
@@ -776,12 +776,12 @@ internal static class CourierManager
                 if (deactivatedCourierIds.Any())
                 {
                     System.Diagnostics.Debug.WriteLine($"[PERIODIC] 📢 Notifying observers about {deactivatedCourierIds.Count} deactivated couriers");
-                    
+
                     foreach (var courierId in deactivatedCourierIds)
                     {
                         Observers.NotifyItemUpdated(courierId);
                     }
-                    
+
                     Observers.NotifyListUpdated();
                 }
                 else
@@ -843,6 +843,9 @@ internal static class CourierManager
                     // =========================================================
                     if (currentOrder is null)
                     {
+                        DO.Delivery? lastDelivery = null;
+                        bool isCoolingDown = false;
+
                         // No current order - small chance to look for one
                         if (s_rand.NextDouble() < 0.15)
                         {
@@ -862,7 +865,7 @@ internal static class CourierManager
                             if (AdminManager.Now < freeAt)
                                 isCoolingDown = true;
                         }
-
+                            
                         if (isCoolingDown)
                             continue; // דלג לשליח הבא
 
@@ -924,6 +927,27 @@ internal static class CourierManager
                         double randomExtra = s_rand.Next(10, 61);
                         TimeSpan threshold = TimeSpan.FromMinutes(Math.Max(estimatedMinutes, 5) + randomExtra);
 
+                        // --- 2. בדיקת תנאי פיזי: האם עבר מספיק זמן נסיעה ---
+                        bool physicalConditionMet = drivingTimeElapsed >= threshold;
+
+                        // --- 3. בדיקת תנאי סטטיסטי: הסתברות להצלחה ---
+                        double successProbability = 0.50; // ברירת מחדל: 50% הצלחה
+
+                        if (totalTimeSinceCreation <= config.MaxDeliveryTime)
+                        {
+                            successProbability = 0.90; // קרוב ל-100% הצלחה אם בזמן
+                        }
+                        else if (totalTimeSinceCreation <= config.MaxDeliveryTime * 1.5)
+                        {
+                            successProbability = 0.55; // 55% הצלחה אם מעט איחור
+                        }
+                        else
+                        {
+                            successProbability = 0.15; // 15% הצלחה אם איחור גדול
+                        }
+
+                        bool statisticalConditionMet = s_rand.NextDouble() < successProbability;
+
                         if (physicalConditionMet && statisticalConditionMet)
                         {
                             // --- קביעת תוצאת המסירה ---
@@ -934,7 +958,7 @@ internal static class CourierManager
                                 {
                                     OrderManager.DeliverOrder(currentOrder.Id);
                                 }
-                                else if (r < 0.92)
+                                else if (resultRoll < 0.95) // 5% Refusal (0.90 - 0.95)
                                 {
                                     OrderManager.RefuseOrder(currentOrder.Id);
                                 }
